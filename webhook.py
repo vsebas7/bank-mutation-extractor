@@ -1,9 +1,3 @@
-"""
-webhook.py — FastAPI server untuk terima webhook dari Lynk.
-Jalankan terpisah dari Streamlit:
-    uvicorn webhook:app --host 0.0.0.0 --port 8000
-"""
-
 from fastapi import FastAPI, Request, HTTPException
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
