@@ -28,7 +28,12 @@ def show_upgrade_page():
                 f"{'✅' if plan_data['max_pdf_per_session'] == -1 else '❌'}"
             )
 
-            is_current = sub["plan"] == plan_name and is_subscription_active()
+            is_current = (
+                sub["plan"] == plan_name 
+                and sub["billing_cycle"] == cycle
+                and is_subscription_active()
+            )
+            
             if is_current:
                 st.success("✅ Plan aktif kamu")
 
