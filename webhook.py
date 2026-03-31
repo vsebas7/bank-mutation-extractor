@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import FileResponse
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
 import hashlib
@@ -71,6 +72,9 @@ def activate_plan(user_id: str, plan: str, billing_cycle: str, amount: int):
 def health_check():
     return {"status": "ok"}
 
+@app.get("/reset-password")
+def reset_password_page():
+    return FileResponse("reset_password.html")
 
 @app.post("/webhook/midtrans")
 async def midtrans_webhook(request: Request):
