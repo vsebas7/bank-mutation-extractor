@@ -6,3 +6,4 @@ pdfplumber
 extra-streamlit-components
 fastapi
 uvicorn
+midtransclient
