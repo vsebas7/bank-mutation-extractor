@@ -1,14 +1,16 @@
 from fastapi import FastAPI, Request, HTTPException
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
+import hashlib
 import os
 
 app = FastAPI()
 
-# ── Supabase (pakai service role key, bukan anon key) ─────────────────────────
+
+# ── Supabase (service role key) ───────────────────────────────────────────────
 def get_supabase():
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_KEY")  # service role, bukan anon!
+    key = os.environ.get("SUPABASE_SERVICE_KEY")
     return create_client(url, key)
 
 
@@ -18,70 +20,25 @@ PLAN_DURATION = {
     "annual":  timedelta(days=365),
 }
 
-# ── Mapping nominal → (plan, billing_cycle) ───────────────────────────────────
-# Sesuaikan dengan harga yang kamu set di Lynk dashboard
-AMOUNT_TO_PLAN = {
-    99000:  ("pro",        "monthly"),
-    990000: ("pro",        "annual"),
-    299000:  ("enterprise", "monthly"),
-    2990000: ("enterprise", "annual"),
-}
+
+def verify_midtrans_signature(order_id: str, status_code: str, gross_amount: str, server_key: str, signature: str) -> bool:
+    raw    = f"{order_id}{status_code}{gross_amount}{server_key}"
+    hashed = hashlib.sha512(raw.encode()).hexdigest()
+    return hashed == signature
 
 
-@app.get("/")
-def health_check():
-    return {"status": "ok"}
-
-
-@app.post("/webhook/lynk")
-async def lynk_webhook(request: Request):
-    payload = await request.json()
-
-    # ── 1. Parse payload dari Lynk ────────────────────────────────────────────
-    status = payload.get("status", "").lower()
-    amount = int(payload.get("amount", 0))
-    notes  = payload.get("notes", "").strip().lower()  # email yang diisi user saat bayar
-
-    # Hanya proses kalau status PAID
-    if status != "paid":
-        return {"message": "ignored", "status": status}
-
-    if not notes:
-        raise HTTPException(status_code=400, detail="notes (email) kosong")
-
-    # ── 2. Cari user berdasarkan email ────────────────────────────────────────
-    supabase = get_supabase()
-
-    try:
-        auth_result = supabase.auth.admin.list_users()
-        user = next((u for u in auth_result if u.email.lower() == notes), None)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal fetch users: {e}")
-
-    if not user:
-        raise HTTPException(status_code=404, detail=f"User tidak ditemukan: {notes}")
-
-    user_id = user.id
-
-    # ── 3. Tentukan plan dari nominal ─────────────────────────────────────────
-    plan_info = AMOUNT_TO_PLAN.get(amount)
-    if not plan_info:
-        raise HTTPException(status_code=400, detail=f"Nominal tidak dikenali: {amount}")
-
-    plan_name, billing_cycle = plan_info
+def activate_plan(user_id: str, plan: str, billing_cycle: str, amount: int):
+    supabase   = get_supabase()
     duration   = PLAN_DURATION[billing_cycle]
     expires_at = datetime.now(timezone.utc) + duration
+    now        = datetime.now(timezone.utc).isoformat()
 
-    # ── 4. Update subscription di Supabase ───────────────────────────────────
     existing = supabase.table("subscriptions")\
         .select("*")\
         .eq("user_id", user_id)\
         .execute()
 
-    now = datetime.now(timezone.utc).isoformat()
-
     if existing.data:
-        # Kalau masih aktif, perpanjang dari expires_at yang ada (tidak di-reset)
         current_expires = existing.data[0].get("expires_at")
         if current_expires:
             current_dt = datetime.fromisoformat(current_expires.replace("Z", "+00:00"))
@@ -91,7 +48,7 @@ async def lynk_webhook(request: Request):
         current_revenue = existing.data[0].get("total_revenue", 0) or 0
 
         supabase.table("subscriptions").update({
-            "plan":          plan_name,
+            "plan":          plan,
             "billing_cycle": billing_cycle,
             "expires_at":    expires_at.isoformat(),
             "is_active":     True,
@@ -101,7 +58,7 @@ async def lynk_webhook(request: Request):
     else:
         supabase.table("subscriptions").insert({
             "user_id":       user_id,
-            "plan":          plan_name,
+            "plan":          plan,
             "billing_cycle": billing_cycle,
             "expires_at":    expires_at.isoformat(),
             "is_active":     True,
@@ -109,10 +66,65 @@ async def lynk_webhook(request: Request):
             "updated_at":    now,
         }).execute()
 
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
+
+
+@app.post("/webhook/midtrans")
+async def midtrans_webhook(request: Request):
+    body = await request.json()
+
+    transaction_status = body.get("transaction_status")
+    fraud_status       = body.get("fraud_status")
+    order_id           = body.get("order_id", "")
+    gross_amount       = body.get("gross_amount", "0")
+    signature_key      = body.get("signature_key", "")
+    status_code        = body.get("status_code", "")
+
+    # ── 1. Verifikasi signature ───────────────────────────────────────────────
+    server_key = os.environ.get("MIDTRANS_SERVER_KEY", "")
+    if not verify_midtrans_signature(order_id, status_code, gross_amount, server_key, signature_key):
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
+    # ── 2. Cek status pembayaran ──────────────────────────────────────────────
+    is_paid = (
+        transaction_status == "settlement"
+        or (transaction_status == "capture" and fraud_status == "accept")
+    )
+
+    if not is_paid:
+        return {"message": "ignored", "status": transaction_status}
+
+    # ── 3. Parse order_id → email, plan, billing_cycle ───────────────────────
+    # Format order_id: email_plan_cycle_timestamp
+    try:
+        parts         = order_id.split("_")
+        email         = parts[0]
+        plan          = parts[1]
+        billing_cycle = parts[2]
+        amount        = int(float(gross_amount))
+    except (IndexError, ValueError):
+        raise HTTPException(status_code=400, detail=f"Format order_id tidak valid: {order_id}")
+
+    # ── 4. Cari user berdasarkan email ────────────────────────────────────────
+    supabase = get_supabase()
+    try:
+        auth_result = supabase.auth.admin.list_users()
+        user        = next((u for u in auth_result if u.email.lower() == email.lower()), None)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal fetch users: {e}")
+
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User tidak ditemukan: {email}")
+
+    # ── 5. Aktifkan plan ──────────────────────────────────────────────────────
+    activate_plan(user.id, plan, billing_cycle, amount)
+
     return {
         "message": "subscription updated",
-        "user_id": user_id,
-        "plan":    plan_name,
+        "user_id": user.id,
+        "plan":    plan,
         "cycle":   billing_cycle,
-        "expires": expires_at.isoformat(),
     }
