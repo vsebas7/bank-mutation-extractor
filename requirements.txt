@@ -3,8 +3,6 @@ supabase
 pandas
 openpyxl
 pdfplumber
-re
-datetime
-tempfile
-io
-xendit-python
+extra-streamlit-components
+fastapi
+uvicorn
