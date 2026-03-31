@@ -2,7 +2,7 @@ import os
 import time
 import midtransclient
 import streamlit as st
-
+import hashlib
 
 def get_midtrans_client():
     server_key = os.environ.get("MIDTRANS_SERVER_KEY") or st.secrets.get("MIDTRANS_SERVER_KEY")
@@ -27,7 +27,8 @@ def create_invoice(user_email: str, plan: str, billing_cycle: str) -> dict:
     snap = get_midtrans_client()
 
     amount      = PLAN_PRICE.get((plan.lower(), billing_cycle.lower()))
-    external_id = f"{user_email}_{plan}_{billing_cycle}_{int(time.time())}"
+    email_hash  = hashlib.md5(user_email.encode()).hexdigest()[:8]
+    external_id = f"{email_hash}_{plan}_{billing_cycle}_{int(time.time())}"
 
     param = {
         "transaction_details": {
