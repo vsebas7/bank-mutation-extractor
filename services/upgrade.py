@@ -22,7 +22,7 @@ def show_upgrade_page():
                 f"{'unlimited' if plan_data['max_pdf_per_session'] == -1 else plan_data['max_pdf_per_session']}"
                 f" PDF"
             )
-            st.write(f"✅ Bank: {', '.join(b.upper() for b in plan_data['allowed_banks'])}")
+            st.write(f"✅ Bank: {', '.join(b.upper() for b in plan_data['allowed_banks'])} dan semua update kedepan")
 
             is_current = sub["plan"] == plan_name and is_subscription_active()
             if is_current:
