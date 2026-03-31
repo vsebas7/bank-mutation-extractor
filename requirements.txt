@@ -1,0 +1,10 @@
+streamlit
+supabase
+pandas
+openpyxl
+pdfplumber
+re
+datetime
+tempfile
+io
+xendit-python
