@@ -17,34 +17,43 @@ from parsers        import PARSER_REGISTRY
 st.set_page_config(page_title="Mutasi Bank PDF", layout="wide")
 
 # ═══════════════════════════════════════════════════
-# RESTORE SESSION dari cookie (sebelum auth gate)
+# RESTORE SESSION dari cookie
 # ═══════════════════════════════════════════════════
 
 restore_session_from_cookie()
 
 # ═══════════════════════════════════════════════════
-# AUTH GATE
+# PLAN & LIMITS
 # ═══════════════════════════════════════════════════
 
-if "user" not in st.session_state:
-    login_page()
-    st.stop()
+GUEST_LIMIT_TX  = 10   # max transaksi untuk guest
+GUEST_LIMIT_PDF = 1    # max PDF untuk guest
 
-PLANS  = get_plans()
-sub    = get_subscription()
-plan   = sub["plan"] if is_subscription_active() else "free"
-limits = PLANS[plan]
+def get_plan_limits():
+    """Kembalikan limits sesuai status login dan plan user."""
+    if "user" not in st.session_state:
+        return {
+            "plan":               "guest",
+            "max_pdf_per_session": GUEST_LIMIT_PDF,
+            "allowed_banks":      list(BANK_DISPLAY_NAME.keys()),  # semua bank boleh
+            "max_transactions":   GUEST_LIMIT_TX,
+        }
+    PLANS  = get_plans()
+    sub    = get_subscription()
+    plan   = sub["plan"] if is_subscription_active() else "free"
+    limits = PLANS[plan]
+    limits["max_transactions"] = None  # tidak dibatasi
+    return limits
 
 
 # ═══════════════════════════════════════════════════
-# URL ROUTING via query_params
+# URL ROUTING
 # ═══════════════════════════════════════════════════
 
 PAGES = {
     "konversi": "🏦 Konversi Mutasi",
     "upgrade":  "⬆️ Upgrade Plan",
 }
-
 DEFAULT_PAGE = "konversi"
 
 
@@ -117,13 +126,44 @@ def _make_filename(name_input: str, bank: str, account: str, year: int) -> str:
 def show_main_page():
     st.title("🏦 Mutasi Bank PDF → Excel (Auto Detect)")
 
+    limits       = get_plan_limits()
+    is_guest     = "user" not in st.session_state
+    max_pdf      = limits["max_pdf_per_session"]
+    max_tx       = limits.get("max_transactions")
+
+    # Banner untuk guest
+    if is_guest:
+        st.info(
+            "👋 Kamu sedang menggunakan versi tamu — hanya **1 PDF** dan "
+            "**10 transaksi pertama** yang akan diekstrak. "
+            "[Login / Register](#) untuk akses penuh.",
+            icon="ℹ️",
+        )
+
     year         = st.number_input("Tahun Mutasi", value=DEFAULT_YEAR)
     excel_name   = st.text_input("Nama file Excel (opsional)", placeholder="Contoh: Mutasi Januari 2025")
     pdf_password = st.text_input("Password PDF (kosongkan jika tidak ada)", type="password")
-    uploaded_files = st.file_uploader("Upload PDF Mutasi", type="pdf", accept_multiple_files=True)
+    uploaded_files = st.file_uploader(
+        f"Upload PDF Mutasi (maks. {max_pdf} file)",
+        type="pdf",
+        accept_multiple_files=not is_guest,  # guest hanya 1 file
+    )
 
+    # Pastikan selalu list
+    if uploaded_files is None:
+        return
+    if not isinstance(uploaded_files, list):
+        uploaded_files = [uploaded_files]
     if not uploaded_files:
         return
+
+    # Enforce PDF limit
+    if len(uploaded_files) > max_pdf:
+        st.warning(
+            f"⚠️ Maksimal {max_pdf} PDF untuk plan kamu. "
+            f"Hanya {max_pdf} file pertama yang akan diproses."
+        )
+        uploaded_files = uploaded_files[:max_pdf]
 
     data_by_month          = {}
     detected_bank          = None
@@ -157,6 +197,10 @@ def show_main_page():
 
             df_temp = parser(path, pdf_password, year=year)
 
+            # Batasi transaksi untuk guest
+            if is_guest and max_tx and df_temp is not None and not df_temp.empty:
+                df_temp = df_temp.head(max_tx)
+
             if df_temp is not None and not df_temp.empty and "date" in df_temp.columns:
                 file_years = pd.to_datetime(df_temp["date"], dayfirst=True).dt.year.unique().tolist()
                 years_in_session.extend(file_years)
@@ -177,6 +221,14 @@ def show_main_page():
     bank_label = BANK_DISPLAY_NAME.get(detected_bank, detected_bank)
 
     st.success(f"✅ Excel berhasil dibuat → {bank_label}")
+
+    # Warning transaksi dibatasi untuk guest
+    if is_guest:
+        st.warning(
+            f"⚠️ Hanya **{GUEST_LIMIT_TX} transaksi pertama** yang diekstrak. "
+            "Login atau daftar untuk mendapatkan semua transaksi.",
+        )
+
     st.info("🔒 File Anda tidak disimpan di server kami.")
     st.download_button(
         "⬇️ Download Excel (per bulan)",
@@ -191,10 +243,20 @@ def show_main_page():
 # ═══════════════════════════════════════════════════
 
 current_page = get_current_page()
+is_logged_in = "user" in st.session_state
 
 with st.sidebar:
-    st.write(f"👤 {st.session_state['user'].email}")
-    st.write(f"📦 Plan: **{plan.capitalize()}**")
+    if is_logged_in:
+        st.write(f"👤 {st.session_state['user'].email}")
+        sub    = get_subscription()
+        plan   = sub["plan"] if is_subscription_active() else "free"
+        st.write(f"📦 Plan: **{plan.capitalize()}**")
+    else:
+        st.write("👤 Tamu")
+        if st.button("Login / Register", use_container_width=True, type="primary"):
+            st.session_state["show_login"] = True
+            st.rerun()
+
     st.divider()
 
     for key, label in PAGES.items():
@@ -202,14 +264,24 @@ with st.sidebar:
             set_page(key)
 
     st.divider()
-    if st.button("Logout", use_container_width=True):
-        logout()
+
+    if is_logged_in:
+        if st.button("Logout", use_container_width=True):
+            logout()
+
 
 # ═══════════════════════════════════════════════════
 # RENDER PAGE
 # ═══════════════════════════════════════════════════
 
-if current_page == "konversi":
+# Kalau guest klik Login di sidebar
+if not is_logged_in and st.session_state.get("show_login"):
+    login_page()
+elif current_page == "konversi":
     show_main_page()
 elif current_page == "upgrade":
-    show_upgrade_page()
+    if is_logged_in:
+        show_upgrade_page()
+    else:
+        st.info("Silakan login dulu untuk melihat halaman upgrade.")
+        login_page()
