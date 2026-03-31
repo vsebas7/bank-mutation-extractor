@@ -28,6 +28,13 @@ def show_upgrade_page():
                 f"{'✅' if plan_data['max_pdf_per_session'] == -1 else '❌'}"
             )
 
+            cycle = st.radio(
+                "Billing",
+                ["monthly", "annual"],
+                key=f"cycle_{plan_name}",
+                format_func=lambda x: "Bulanan" if x == "monthly" else "Tahunan",
+            )
+
             is_current = (
                 sub["plan"] == plan_name 
                 and sub["billing_cycle"] == cycle
@@ -36,13 +43,6 @@ def show_upgrade_page():
             
             if is_current:
                 st.success("✅ Plan aktif kamu")
-
-            cycle = st.radio(
-                "Billing",
-                ["monthly", "annual"],
-                key=f"cycle_{plan_name}",
-                format_func=lambda x: "Bulanan" if x == "monthly" else "Tahunan",
-            )
 
             if st.button(
                 f"Pilih {plan_data['label']}",
