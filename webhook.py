@@ -97,34 +97,33 @@ async def midtrans_webhook(request: Request):
     if not is_paid:
         return {"message": "ignored", "status": transaction_status}
 
-    # ── 3. Parse order_id → email, plan, billing_cycle ───────────────────────
-    # Format order_id: email_plan_cycle_timestamp
-    try:
-        parts         = order_id.split("_")
-        email         = parts[0]
-        plan          = parts[1]
-        billing_cycle = parts[2]
-        amount        = int(float(gross_amount))
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=400, detail=f"Format order_id tidak valid: {order_id}")
-
-    # ── 4. Cari user berdasarkan email ────────────────────────────────────────
+    # ── 3. Cari invoice di Supabase berdasarkan order_id ─────────────────────
     supabase = get_supabase()
-    try:
-        auth_result = supabase.auth.admin.list_users()
-        user        = next((u for u in auth_result if u.email.lower() == email.lower()), None)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal fetch users: {e}")
+    invoice  = supabase.table("invoices")\
+        .select("*")\
+        .eq("order_id", order_id)\
+        .execute()
 
-    if not user:
-        raise HTTPException(status_code=404, detail=f"User tidak ditemukan: {email}")
+    if not invoice.data:
+        raise HTTPException(status_code=404, detail=f"Invoice tidak ditemukan: {order_id}")
 
-    # ── 5. Aktifkan plan ──────────────────────────────────────────────────────
-    activate_plan(user.id, plan, billing_cycle, amount)
+    inv           = invoice.data[0]
+    user_id       = inv["user_id"]
+    plan          = inv["plan"]
+    billing_cycle = inv["billing_cycle"]
+    amount        = inv["amount"]
+
+    # ── 4. Aktifkan plan ──────────────────────────────────────────────────────
+    activate_plan(user_id, plan, billing_cycle, amount)
+
+    # ── 5. Update status invoice ──────────────────────────────────────────────
+    supabase.table("invoices").update({
+        "status": "paid"
+    }).eq("order_id", order_id).execute()
 
     return {
         "message": "subscription updated",
-        "user_id": user.id,
+        "user_id": user_id,
         "plan":    plan,
         "cycle":   billing_cycle,
     }
