@@ -1,4 +1,3 @@
-import os
 import streamlit as st
 from supabase import create_client
 import extra_streamlit_components as stx
@@ -7,6 +6,7 @@ COOKIE_NAME    = "sb_token"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 hari
 
 cookie_manager = stx.CookieManager()
+
 
 def get_supabase():
     url = st.secrets["SUPABASE_URL"]
@@ -35,19 +35,25 @@ def restore_session_from_cookie():
 def login_page():
     st.title("🏦 Mutasi Bank App")
 
-    # Cek apakah ada token reset password di query params
+    # ── Cek apakah ini halaman reset password ────────────────────────────────
     params = st.query_params
-    if "type" in params and params["type"] == "recovery":
-        _reset_password_page()
+    if params.get("type") == "recovery" and "access_token" in params:
+        _reset_password_page(params["access_token"])
         return
 
-    tab_login, tab_register, tab_forgot = st.tabs(["Login", "Register", "Forgot Password"])
+    # ── Cek apakah sedang di halaman forgot password ─────────────────────────
+    if st.session_state.get("show_forgot"):
+        _forgot_password_page()
+        return
 
-    # ── Login ─────────────────────────────────────────────────────────────────
-    with tab_login:
-        email    = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_password")
+    # ── Login page utama ──────────────────────────────────────────────────────
+    st.subheader("Login")
 
+    email    = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+
+    col1, col2 = st.columns(2)
+    with col1:
         if st.button("Login", use_container_width=True):
             try:
                 supabase = get_supabase()
@@ -57,7 +63,6 @@ def login_page():
                 })
                 st.session_state["user"]  = res.user
                 st.session_state["token"] = res.session.access_token
-
                 cookie_manager.set(
                     COOKIE_NAME,
                     res.session.access_token,
@@ -67,55 +72,54 @@ def login_page():
             except Exception:
                 st.error("Login gagal. Periksa email dan password kamu.")
 
-    # ── Register ──────────────────────────────────────────────────────────────
-    with tab_register:
-        reg_email    = st.text_input("Email", key="reg_email")
-        reg_password = st.text_input("Password", type="password", key="reg_password")
-        reg_confirm  = st.text_input("Konfirmasi Password", type="password", key="reg_confirm")
-
+    with col2:
         if st.button("Register", use_container_width=True):
-            if reg_password != reg_confirm:
-                st.error("Password tidak sama.")
-            elif len(reg_password) < 6:
-                st.error("Password minimal 6 karakter.")
-            else:
-                try:
-                    supabase = get_supabase()
-                    supabase.auth.sign_up({
-                        "email":    reg_email,
-                        "password": reg_password,
-                    })
-                    st.success("Registrasi berhasil! Cek email kamu untuk konfirmasi akun.")
-                except Exception as e:
-                    st.error(f"Registrasi gagal: {e}")
+            try:
+                supabase = get_supabase()
+                supabase.auth.sign_up({"email": email, "password": password})
+                st.success("Registrasi berhasil! Cek email kamu untuk konfirmasi akun.")
+            except Exception as e:
+                st.error(f"Registrasi gagal: {e}")
 
-    # ── Forgot Password ───────────────────────────────────────────────────────
-    with tab_forgot:
-        forgot_email = st.text_input("Email", key="forgot_email")
-
-        if st.button("Kirim Link Reset Password", use_container_width=True):
-            if not forgot_email:
-                st.error("Masukkan email kamu.")
-            else:
-                try:
-                    supabase = get_supabase()
-                    supabase.auth.reset_password_email(
-                        forgot_email,
-                        options={
-                            "redirect_to": "https://bank-mutation-extractor.streamlit.app"
-                        }
-                    )
-                    st.success("Link reset password sudah dikirim ke email kamu!")
-                except Exception as e:
-                    st.error(f"Gagal kirim email: {e}")
+    # Link lupa password
+    st.write("")
+    if st.button("Lupa password?", type="tertiary"):
+        st.session_state["show_forgot"] = True
+        st.rerun()
 
 
-def _reset_password_page():
-    """Halaman set password baru setelah klik link dari email."""
+def _forgot_password_page():
+    st.subheader("🔑 Lupa Password")
+
+    forgot_email = st.text_input("Masukkan email kamu")
+
+    if st.button("Kirim Link Reset Password", use_container_width=True):
+        if not forgot_email:
+            st.error("Masukkan email kamu.")
+        else:
+            try:
+                supabase = get_supabase()
+                supabase.auth.reset_password_email(
+                    forgot_email,
+                    options={
+                        "redirect_to": "https://bank-mutation-extractor-production.up.railway.app/reset-password"
+                    }
+                )
+                st.success("Link reset password sudah dikirim! Cek email kamu.")
+            except Exception as e:
+                st.error(f"Gagal kirim email: {e}")
+
+    st.write("")
+    if st.button("← Kembali ke Login", type="tertiary"):
+        st.session_state["show_forgot"] = False
+        st.rerun()
+
+
+def _reset_password_page(access_token: str):
     st.subheader("🔑 Set Password Baru")
 
-    new_password     = st.text_input("Password Baru", type="password", key="new_password")
-    confirm_password = st.text_input("Konfirmasi Password", type="password", key="confirm_password")
+    new_password     = st.text_input("Password Baru", type="password")
+    confirm_password = st.text_input("Konfirmasi Password", type="password")
 
     if st.button("Update Password", use_container_width=True):
         if new_password != confirm_password:
@@ -125,9 +129,10 @@ def _reset_password_page():
         else:
             try:
                 supabase = get_supabase()
+                # Set session dulu dengan access token dari link
+                supabase.auth.set_session(access_token, access_token)
                 supabase.auth.update_user({"password": new_password})
                 st.success("Password berhasil diupdate! Silakan login.")
-                # Hapus query params recovery
                 st.query_params.clear()
                 st.rerun()
             except Exception as e:
