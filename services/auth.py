@@ -80,6 +80,7 @@ def login_page():
                 st.success("Registrasi berhasil! Cek email kamu untuk konfirmasi akun.")
             except Exception as e:
                 st.error(f"Registrasi gagal: {e}")
+                st.error(f"Detail: {type(e).__name__}: {str(e)}")
 
     # Link lupa password
     st.write("")
