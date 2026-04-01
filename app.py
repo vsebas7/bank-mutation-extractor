@@ -17,23 +17,21 @@ from parsers        import PARSER_REGISTRY
 
 st.set_page_config(page_title="Mutasi Bank PDF", layout="wide")
 
-# ── CSS override: ganti warna primary button & download button ─────────────────
+# ── CSS: button colors + footer ────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Primary button — semua selector Streamlit yang diketahui */
+/* Primary button */
 button[kind="primary"],
 .stButton > button[kind="primary"],
-div[data-testid="stButton"] > button[kind="primary"],
-.stButton button[data-baseweb="button"][kind="primary"] {
+div[data-testid="stButton"] > button[kind="primary"] {
     background-color: #4fa8ff !important;
     color: #F3F6FA !important;
     border: none !important;
 }
 button[kind="primary"]:hover,
-.stButton > button[kind="primary"]:hover,
-div[data-testid="stButton"] > button[kind="primary"]:hover {
+.stButton > button[kind="primary"]:hover {
     background-color: #3b8fe0 !important;
-    color: #1E293B !important;
+    color: #F3F6FA !important;
 }
 
 /* Download button */
@@ -43,10 +41,27 @@ div[data-testid="stDownloadButton"] > button {
     color: #F3F6FA !important;
     border: none !important;
 }
-.stDownloadButton > button:hover,
-div[data-testid="stDownloadButton"] > button:hover {
+.stDownloadButton > button:hover {
     background-color: #3b8fe0 !important;
-    color: #1E293B !important;
+    color: #F3F6FA !important;
+}
+
+/* Footer */
+.runflow-footer {
+    margin-top: 3rem;
+    padding: 1.25rem 0 0.5rem 0;
+    border-top: 1px solid rgba(128,128,128,0.2);
+    text-align: center;
+    font-size: 0.82rem;
+    color: #94a3b8;
+    line-height: 1.8;
+}
+.runflow-footer a {
+    color: #4fa8ff;
+    text-decoration: none;
+}
+.runflow-footer a:hover {
+    text-decoration: underline;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -149,15 +164,23 @@ def _show_subscription_banner(sub: dict, plan: str):
 
 def _show_preview_table(data_by_month: dict):
     sorted_months = sorted(data_by_month.keys())
-
     st.subheader("🔍 Preview Data per Bulan")
     tabs = st.tabs(sorted_months)
-
     for tab, month in zip(tabs, sorted_months):
         df = pd.concat(data_by_month[month], ignore_index=True)
         with tab:
             st.dataframe(df.head(5), use_container_width=True)
             st.caption(f"Total **{len(df)}** baris di sheet **{month}**")
+
+
+def _show_footer():
+    st.markdown("""
+    <div class="runflow-footer">
+        Ada bank yang belum didukung atau ingin memberikan masukan?<br>
+        Hubungi kami di <a href="mailto:runflow.id@gmail.com">runflow.id@gmail.com</a><br><br>
+        © 2025 Runflow · Dibuat dengan ❤️ untuk kemudahan keuangan Anda
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════
@@ -173,11 +196,13 @@ def show_main_page():
     uploaded_files = st.file_uploader("Upload PDF Mutasi", type="pdf", accept_multiple_files=True)
 
     if not uploaded_files:
+        _show_footer()
         return
 
     mulai = st.button("🚀 Proses PDF", type="primary", use_container_width=True)
     if not mulai:
         st.caption(f"{len(uploaded_files)} file siap. Klik tombol di atas untuk memulai.")
+        _show_footer()
         return
 
     progress_bar = st.progress(0, text="⏳ Memulai proses...")
@@ -202,7 +227,6 @@ def show_main_page():
 
         _open_pdf_or_stop(path, pdf_password, uploaded.name)
 
-        # Validasi tahun dari teks PDF sebelum parsing
         pdf_year = detect_pdf_year(path, pdf_password)
         if pdf_year is not None and pdf_year != int(year):
             progress_bar.empty()
@@ -241,6 +265,7 @@ def show_main_page():
         all_dfs.append(df_temp)
 
     if has_error:
+        _show_footer()
         return
 
     progress_bar.progress(100, text="✅ Semua file selesai diproses!")
@@ -248,6 +273,7 @@ def show_main_page():
 
     if not data_by_month:
         st.error("❌ Tidak ada transaksi yang berhasil di-extract.")
+        _show_footer()
         return
 
     output     = _build_excel(data_by_month)
@@ -266,6 +292,8 @@ def show_main_page():
 
     st.divider()
     _show_preview_table(data_by_month)
+
+    _show_footer()
 
 
 # ═══════════════════════════════════════════════════
