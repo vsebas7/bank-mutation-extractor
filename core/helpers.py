@@ -5,23 +5,33 @@ from datetime import datetime
 
 
 def month_key(df):
-    # Pakai dayfirst=True tanpa hardcode format — lebih robust untuk berbagai format tanggal
-    # yang dikembalikan parser (dd/mm/yyyy, yyyy-mm-dd, dd-mm-yyyy, dll.)
+    # dayfirst=True tanpa hardcode format — robust untuk berbagai format tanggal
     dt = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
-
-    # Drop NaT sebelum ambil nilai pertama
     valid = dt.dropna()
     if valid.empty:
         return "UNKNOWN"
-
     return valid.dt.strftime("%Y-%m").iloc[0]
 
 
+def detect_pdf_year(pdf_path: str, password: str = "") -> int | None:
+    
+    _YEAR_RE = re.compile(r"\b(20\d{2})\b")
+    with pdfplumber.open(pdf_path, password=password) as pdf:
+        text = ""
+        for page in pdf.pages[:3]:
+            t = page.extract_text()
+            if t:
+                text += t
+    years = _YEAR_RE.findall(text)
+    if not years:
+        return None
+        
+    from collections import Counter
+    return int(Counter(years).most_common(1)[0][0])
+
+
 def extract_account_number(pdf_path, password):
-    """
-    Ambil nomor rekening dari halaman pertama PDF.
-    Fallback ke '' kalau tidak ketemu.
-    """
+    
     patterns = [
         r"NO\.?\s*REKENING\s*[:\-]?\s*(\d+)",
         r"NO\s*REK\s*[:\-]?\s*(\d+)",
@@ -32,7 +42,6 @@ def extract_account_number(pdf_path, password):
         r"Nomor Rekening/Account Number\s*:\s*(\d+)",
     ]
     with pdfplumber.open(pdf_path, password=password) as pdf:
-        # Cek halaman 1–3 (Rekening Koran menyimpan nomor rek di halaman 2-3)
         for page in pdf.pages[:3]:
             text = page.extract_text()
             if not text:
