@@ -17,35 +17,49 @@ from parsers        import PARSER_REGISTRY
 
 st.set_page_config(page_title="Mutasi Bank PDF", layout="wide")
 
+# ── CSS override: ganti warna primary button & download button ─────────────────
 st.markdown("""
 <style>
-/* Primary button — Proses PDF, nav aktif */
+/* Primary button — semua selector Streamlit yang diketahui */
+button[kind="primary"],
 .stButton > button[kind="primary"],
-.stButton > button[data-testid="baseButton-primary"] {
+div[data-testid="stButton"] > button[kind="primary"],
+.stButton button[data-baseweb="button"][kind="primary"] {
     background-color: #4fa8ff !important;
-    color: #1E293B !important;
+    color: #F3F6FA !important;
     border: none !important;
 }
+button[kind="primary"]:hover,
 .stButton > button[kind="primary"]:hover,
-.stButton > button[data-testid="baseButton-primary"]:hover {
+div[data-testid="stButton"] > button[kind="primary"]:hover {
     background-color: #3b8fe0 !important;
     color: #1E293B !important;
 }
 
 /* Download button */
-.stDownloadButton > button {
+.stDownloadButton > button,
+div[data-testid="stDownloadButton"] > button {
     background-color: #4fa8ff !important;
-    color: #1E293B !important;
+    color: #F3F6FA !important;
     border: none !important;
 }
-.stDownloadButton > button:hover {
+.stDownloadButton > button:hover,
+div[data-testid="stDownloadButton"] > button:hover {
     background-color: #3b8fe0 !important;
     color: #1E293B !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
+# ═══════════════════════════════════════════════════
+# RESTORE SESSION dari cookie (sebelum auth gate)
+# ═══════════════════════════════════════════════════
+
 restore_session_from_cookie()
+
+# ═══════════════════════════════════════════════════
+# AUTH GATE
+# ═══════════════════════════════════════════════════
 
 if "user" not in st.session_state:
     login_page()
@@ -131,6 +145,7 @@ def _show_subscription_banner(sub: dict, plan: str):
         st.sidebar.warning(f"⏳ Subscription habis dalam **{days_left} hari** ({end_date.strftime('%d %b %Y')})")
     else:
         st.sidebar.info(f"✅ Aktif hingga **{end_date.strftime('%d %b %Y')}** ({days_left} hari lagi)")
+
 
 def _show_preview_table(data_by_month: dict):
     sorted_months = sorted(data_by_month.keys())
