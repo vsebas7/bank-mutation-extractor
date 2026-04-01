@@ -9,7 +9,7 @@ import streamlit as st
 from services.auth    import login_page, logout, restore_session_from_cookie
 from services.db      import get_plans, get_subscription, is_subscription_active
 from services.upgrade import show_upgrade_page
-from core.helpers     import month_key, extract_account_number
+from core.helpers     import month_key, extract_account_number, detect_pdf_year
 
 from core.constants import DEFAULT_YEAR, BANK_DISPLAY_NAME
 from core.detector  import detect_bank
@@ -109,7 +109,6 @@ def _show_subscription_banner(sub: dict, plan: str):
     if not end_date:
         return
 
-    # Handle timestamptz dari Supabase — string ISO dengan timezone atau datetime object
     if isinstance(end_date, str):
         end_date = datetime.fromisoformat(end_date.replace("Z", "+00:00")).astimezone(timezone.utc).date()
     elif hasattr(end_date, "date"):
@@ -126,12 +125,9 @@ def _show_subscription_banner(sub: dict, plan: str):
 
 
 def _show_summary_stats(all_dfs: list[pd.DataFrame]):
-    """Show summary statistics from all parsed dataframes."""
-    combined = pd.concat(all_dfs, ignore_index=True)
-
+    combined   = pd.concat(all_dfs, ignore_index=True)
     total_rows = len(combined)
 
-    # Cari kolom debit/kredit secara fleksibel (nama kolom bisa beda tiap bank)
     debit_col  = next((c for c in combined.columns if "debit"  in c.lower()), None)
     kredit_col = next((c for c in combined.columns if "kredit" in c.lower() or "credit" in c.lower()), None)
 
@@ -153,7 +149,6 @@ def _show_summary_stats(all_dfs: list[pd.DataFrame]):
 
 
 def _show_preview_table(data_by_month: dict):
-    """Show a preview of the first month's data."""
     first_month = sorted(data_by_month.keys())[0]
     first_df    = pd.concat(data_by_month[first_month], ignore_index=True)
 
@@ -177,13 +172,13 @@ def show_main_page():
     if not uploaded_files:
         return
 
-    # ── Tombol proses — harus diklik dulu sebelum jalan ──
+    # ── Tombol proses ──────────────────────────────
     mulai = st.button("🚀 Proses PDF", type="primary", use_container_width=True)
     if not mulai:
         st.caption(f"{len(uploaded_files)} file siap. Klik tombol di atas untuk memulai.")
         return
 
-    # ── Progress bar muncul setelah tombol diklik ─────────
+    # ── Progress bar ───────────────────────────────
     progress_bar = st.progress(0, text="⏳ Memulai proses...")
     status_text  = st.empty()
 
@@ -191,7 +186,6 @@ def show_main_page():
     detected_bank          = None
     detected_account       = None
     banks_in_session: list = []
-    years_in_session: list = []
     all_dfs: list          = []
     total_files            = len(uploaded_files)
     has_error              = False
@@ -206,6 +200,19 @@ def show_main_page():
             path = tmp.name
 
         _open_pdf_or_stop(path, pdf_password, uploaded.name)
+
+        # ── Validasi tahun: baca langsung dari teks PDF ──
+        pdf_year = detect_pdf_year(path, pdf_password)
+        if pdf_year is not None and pdf_year != int(year):
+            progress_bar.empty()
+            status_text.empty()
+            st.warning(
+                f"⚠️ **{uploaded.name}** terdeteksi sebagai dokumen tahun **{pdf_year}**, "
+                f"tapi input tahun mutasi adalah **{int(year)}**. "
+                "Pastikan tahun mutasi sudah sesuai dengan PDF yang diupload."
+            )
+            has_error = True
+            break
 
         bank       = detect_bank(path, pdf_password)
         account_no = extract_account_number(path, pdf_password)
@@ -224,24 +231,6 @@ def show_main_page():
             continue
 
         df_temp = parser(path, pdf_password, year=year)
-
-        if df_temp is not None and not df_temp.empty and "date" in df_temp.columns:
-            file_years = pd.to_datetime(df_temp["date"], dayfirst=True).dt.year.unique().tolist()
-            years_in_session.extend(file_years)
-
-            # Validasi tahun — pakai has_error + break, bukan st.stop()
-            # supaya progress bar bisa di-clear dulu sebelum warning muncul
-            unique_years = set(years_in_session)
-            if len(unique_years) > 1:
-                progress_bar.empty()
-                status_text.empty()
-                st.warning(
-                    f"⚠️ Terdeteksi transaksi dari tahun berbeda: "
-                    f"**{', '.join(str(y) for y in sorted(unique_years))}**. "
-                    "Harap upload PDF dari tahun yang sama saja."
-                )
-                has_error = True
-                break
 
         if df_temp is None or df_temp.empty or "date" not in df_temp.columns:
             st.warning(f"⚠️ Tidak ada transaksi valid: {uploaded.name}")
@@ -296,7 +285,6 @@ with st.sidebar:
     st.write(f"👤 {st.session_state['user'].email}")
     st.write(f"📦 Plan: **{plan.capitalize()}**")
 
-    # ── Subscription days remaining ────────────────
     _show_subscription_banner(sub, plan)
 
     st.divider()
