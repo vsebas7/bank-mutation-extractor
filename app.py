@@ -1,6 +1,6 @@
 import tempfile
 from io import BytesIO
-from datetime import date
+from datetime import date, datetime, timezone
 
 import pandas as pd
 import pdfplumber
@@ -48,8 +48,6 @@ PAGES = {
 
 DEFAULT_PAGE = "konversi"
 
-print(sub)
-st.write(sub)
 
 def get_current_page() -> str:
     page = st.query_params.get("page", DEFAULT_PAGE)
@@ -84,17 +82,6 @@ def _validate_single_bank(banks: list[str]):
         st.stop()
 
 
-def _validate_single_year(years: list[int]):
-    unique = set(years)
-    if len(unique) > 1:
-        st.warning(
-            f"⚠️ Terdeteksi transaksi dari tahun berbeda: "
-            f"**{', '.join(str(y) for y in sorted(unique))}**. "
-            "Harap upload PDF dari tahun yang sama saja."
-        )
-        st.stop()
-
-
 def _build_excel(data_by_month: dict) -> BytesIO:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -118,14 +105,12 @@ def _show_subscription_banner(sub: dict, plan: str):
     if plan == "free":
         return
 
-    end_date = sub.get("end_date")
+    end_date = sub.get("expires_at")
     if not end_date:
         return
 
-    # end_date dari Supabase timestamptz — bisa string ISO dengan timezone atau datetime object
+    # Handle timestamptz dari Supabase — string ISO dengan timezone atau datetime object
     if isinstance(end_date, str):
-        # Contoh: "2025-04-01T00:00:00+07:00" atau "2025-04-01T00:00:00Z"
-        from datetime import datetime, timezone
         end_date = datetime.fromisoformat(end_date.replace("Z", "+00:00")).astimezone(timezone.utc).date()
     elif hasattr(end_date, "date"):
         end_date = end_date.date()
@@ -184,13 +169,23 @@ def _show_preview_table(data_by_month: dict):
 def show_main_page():
     st.title("🏦 Mutasi Bank PDF → Excel (Auto Detect)")
 
-    year         = st.number_input("Tahun Mutasi", value=DEFAULT_YEAR)
-    excel_name   = st.text_input("Nama file Excel (opsional)", placeholder="Contoh: Mutasi Januari 2025")
-    pdf_password = st.text_input("Password PDF (kosongkan jika tidak ada)", type="password")
+    year           = st.number_input("Tahun Mutasi", value=DEFAULT_YEAR)
+    excel_name     = st.text_input("Nama file Excel (opsional)", placeholder="Contoh: Mutasi Januari 2025")
+    pdf_password   = st.text_input("Password PDF (kosongkan jika tidak ada)", type="password")
     uploaded_files = st.file_uploader("Upload PDF Mutasi", type="pdf", accept_multiple_files=True)
 
     if not uploaded_files:
         return
+
+    # ── Tombol proses — harus diklik dulu sebelum jalan ──
+    mulai = st.button("🚀 Proses PDF", type="primary", use_container_width=True)
+    if not mulai:
+        st.caption(f"{len(uploaded_files)} file siap. Klik tombol di atas untuk memulai.")
+        return
+
+    # ── Progress bar muncul setelah tombol diklik ─────────
+    progress_bar = st.progress(0, text="⏳ Memulai proses...")
+    status_text  = st.empty()
 
     data_by_month          = {}
     detected_bank          = None
@@ -198,15 +193,11 @@ def show_main_page():
     banks_in_session: list = []
     years_in_session: list = []
     all_dfs: list          = []
-
-    total_files = len(uploaded_files)
-
-    # Progress bar
-    progress_bar   = st.progress(0, text="⏳ Memulai proses...")
-    status_text    = st.empty()
+    total_files            = len(uploaded_files)
+    has_error              = False
 
     for idx, uploaded in enumerate(uploaded_files):
-        progress_pct  = int((idx / total_files) * 100)
+        progress_pct = int((idx / total_files) * 100)
         progress_bar.progress(progress_pct, text=f"📄 Memproses: **{uploaded.name}** ({idx + 1}/{total_files})")
         status_text.caption(f"File {idx + 1} dari {total_files}: `{uploaded.name}`")
 
@@ -237,7 +228,20 @@ def show_main_page():
         if df_temp is not None and not df_temp.empty and "date" in df_temp.columns:
             file_years = pd.to_datetime(df_temp["date"], dayfirst=True).dt.year.unique().tolist()
             years_in_session.extend(file_years)
-            _validate_single_year(years_in_session)
+
+            # Validasi tahun — pakai has_error + break, bukan st.stop()
+            # supaya progress bar bisa di-clear dulu sebelum warning muncul
+            unique_years = set(years_in_session)
+            if len(unique_years) > 1:
+                progress_bar.empty()
+                status_text.empty()
+                st.warning(
+                    f"⚠️ Terdeteksi transaksi dari tahun berbeda: "
+                    f"**{', '.join(str(y) for y in sorted(unique_years))}**. "
+                    "Harap upload PDF dari tahun yang sama saja."
+                )
+                has_error = True
+                break
 
         if df_temp is None or df_temp.empty or "date" not in df_temp.columns:
             st.warning(f"⚠️ Tidak ada transaksi valid: {uploaded.name}")
@@ -245,6 +249,9 @@ def show_main_page():
 
         data_by_month.setdefault(month_key(df_temp), []).append(df_temp)
         all_dfs.append(df_temp)
+
+    if has_error:
+        return
 
     # Progress selesai
     progress_bar.progress(100, text="✅ Semua file selesai diproses!")
@@ -254,20 +261,12 @@ def show_main_page():
         st.error("❌ Tidak ada transaksi yang berhasil di-extract.")
         return
 
-    # ── Summary stats ──────────────────────────────
-    st.divider()
-    st.subheader("📊 Ringkasan Transaksi")
-    _show_summary_stats(all_dfs)
-
-    # ── Preview tabel ──────────────────────────────
-    _show_preview_table(data_by_month)
-
-    # ── Build & download Excel ─────────────────────
+    # ── Build Excel ────────────────────────────────
     output     = _build_excel(data_by_month)
     filename   = _make_filename(excel_name, detected_bank, detected_account, year)
     bank_label = BANK_DISPLAY_NAME.get(detected_bank, detected_bank)
 
-    st.divider()
+    # ── Download button langsung di bawah progress ─
     st.success(f"✅ Excel berhasil dibuat → {bank_label}")
     st.info("🔒 File Anda tidak disimpan di server kami.")
     st.download_button(
@@ -275,7 +274,16 @@ def show_main_page():
         output,
         filename,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
     )
+
+    # ── Summary stats ──────────────────────────────
+    st.divider()
+    st.subheader("📊 Ringkasan Transaksi")
+    _show_summary_stats(all_dfs)
+
+    # ── Preview tabel ──────────────────────────────
+    _show_preview_table(data_by_month)
 
 
 # ═══════════════════════════════════════════════════
