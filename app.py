@@ -17,15 +17,35 @@ from parsers        import PARSER_REGISTRY
 
 st.set_page_config(page_title="Mutasi Bank PDF", layout="wide")
 
-# ═══════════════════════════════════════════════════
-# RESTORE SESSION dari cookie (sebelum auth gate)
-# ═══════════════════════════════════════════════════
+st.markdown("""
+<style>
+/* Primary button — Proses PDF, nav aktif */
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="baseButton-primary"] {
+    background-color: #4fa8ff !important;
+    color: #1E293B !important;
+    border: none !important;
+}
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid="baseButton-primary"]:hover {
+    background-color: #3b8fe0 !important;
+    color: #1E293B !important;
+}
+
+/* Download button */
+.stDownloadButton > button {
+    background-color: #4fa8ff !important;
+    color: #1E293B !important;
+    border: none !important;
+}
+.stDownloadButton > button:hover {
+    background-color: #3b8fe0 !important;
+    color: #1E293B !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 restore_session_from_cookie()
-
-# ═══════════════════════════════════════════════════
-# AUTH GATE
-# ═══════════════════════════════════════════════════
 
 if "user" not in st.session_state:
     login_page()
@@ -36,16 +56,10 @@ sub    = get_subscription()
 plan   = sub["plan"] if is_subscription_active() else "free"
 limits = PLANS[plan]
 
-
-# ═══════════════════════════════════════════════════
-# URL ROUTING via query_params
-# ═══════════════════════════════════════════════════
-
 PAGES = {
     "konversi": "🏦 Konversi Mutasi",
     "upgrade":  "⬆️ Upgrade Plan",
 }
-
 DEFAULT_PAGE = "konversi"
 
 
@@ -101,21 +115,16 @@ def _make_filename(name_input: str, bank: str, account: str, year: int) -> str:
 
 
 def _show_subscription_banner(sub: dict, plan: str):
-    """Show subscription days remaining as a banner in the sidebar."""
     if plan == "free":
         return
-
     end_date = sub.get("expires_at")
     if not end_date:
         return
-
     if isinstance(end_date, str):
         end_date = datetime.fromisoformat(end_date.replace("Z", "+00:00")).astimezone(timezone.utc).date()
     elif hasattr(end_date, "date"):
         end_date = end_date.date()
-
     days_left = (end_date - date.today()).days
-
     if days_left <= 0:
         st.sidebar.error("⚠️ Subscription Anda sudah habis!")
     elif days_left <= 7:
@@ -123,38 +132,17 @@ def _show_subscription_banner(sub: dict, plan: str):
     else:
         st.sidebar.info(f"✅ Aktif hingga **{end_date.strftime('%d %b %Y')}** ({days_left} hari lagi)")
 
-
-def _show_summary_stats(all_dfs: list[pd.DataFrame]):
-    combined   = pd.concat(all_dfs, ignore_index=True)
-    total_rows = len(combined)
-
-    debit_col  = next((c for c in combined.columns if "debit"  in c.lower()), None)
-    kredit_col = next((c for c in combined.columns if "kredit" in c.lower() or "credit" in c.lower()), None)
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📄 Total Transaksi", f"{total_rows:,}")
-
-    if debit_col:
-        total_debit = pd.to_numeric(combined[debit_col], errors="coerce").sum()
-        col2.metric("🔴 Total Debit", f"Rp {total_debit:,.0f}")
-
-    if kredit_col:
-        total_kredit = pd.to_numeric(combined[kredit_col], errors="coerce").sum()
-        col3.metric("🟢 Total Kredit", f"Rp {total_kredit:,.0f}")
-
-    if debit_col and kredit_col:
-        net = total_kredit - total_debit
-        delta_color = "normal" if net >= 0 else "inverse"
-        col4.metric("💰 Net (Kredit - Debit)", f"Rp {net:,.0f}", delta_color=delta_color)
-
-
 def _show_preview_table(data_by_month: dict):
-    first_month = sorted(data_by_month.keys())[0]
-    first_df    = pd.concat(data_by_month[first_month], ignore_index=True)
+    sorted_months = sorted(data_by_month.keys())
 
-    with st.expander(f"🔍 Preview Data — {first_month} (5 baris pertama)", expanded=True):
-        st.dataframe(first_df.head(5), use_container_width=True)
-        st.caption(f"Total {len(first_df)} baris di sheet **{first_month}**")
+    st.subheader("🔍 Preview Data per Bulan")
+    tabs = st.tabs(sorted_months)
+
+    for tab, month in zip(tabs, sorted_months):
+        df = pd.concat(data_by_month[month], ignore_index=True)
+        with tab:
+            st.dataframe(df.head(5), use_container_width=True)
+            st.caption(f"Total **{len(df)}** baris di sheet **{month}**")
 
 
 # ═══════════════════════════════════════════════════
@@ -172,13 +160,11 @@ def show_main_page():
     if not uploaded_files:
         return
 
-    # ── Tombol proses ──────────────────────────────
     mulai = st.button("🚀 Proses PDF", type="primary", use_container_width=True)
     if not mulai:
         st.caption(f"{len(uploaded_files)} file siap. Klik tombol di atas untuk memulai.")
         return
 
-    # ── Progress bar ───────────────────────────────
     progress_bar = st.progress(0, text="⏳ Memulai proses...")
     status_text  = st.empty()
 
@@ -201,7 +187,7 @@ def show_main_page():
 
         _open_pdf_or_stop(path, pdf_password, uploaded.name)
 
-        # ── Validasi tahun: baca langsung dari teks PDF ──
+        # Validasi tahun dari teks PDF sebelum parsing
         pdf_year = detect_pdf_year(path, pdf_password)
         if pdf_year is not None and pdf_year != int(year):
             progress_bar.empty()
@@ -242,7 +228,6 @@ def show_main_page():
     if has_error:
         return
 
-    # Progress selesai
     progress_bar.progress(100, text="✅ Semua file selesai diproses!")
     status_text.empty()
 
@@ -250,12 +235,10 @@ def show_main_page():
         st.error("❌ Tidak ada transaksi yang berhasil di-extract.")
         return
 
-    # ── Build Excel ────────────────────────────────
     output     = _build_excel(data_by_month)
     filename   = _make_filename(excel_name, detected_bank, detected_account, year)
     bank_label = BANK_DISPLAY_NAME.get(detected_bank, detected_bank)
 
-    # ── Download button langsung di bawah progress ─
     st.success(f"✅ Excel berhasil dibuat → {bank_label}")
     st.info("🔒 File Anda tidak disimpan di server kami.")
     st.download_button(
@@ -266,12 +249,7 @@ def show_main_page():
         use_container_width=True,
     )
 
-    # ── Summary stats ──────────────────────────────
     st.divider()
-    st.subheader("📊 Ringkasan Transaksi")
-    _show_summary_stats(all_dfs)
-
-    # ── Preview tabel ──────────────────────────────
     _show_preview_table(data_by_month)
 
 
@@ -284,15 +262,11 @@ current_page = get_current_page()
 with st.sidebar:
     st.write(f"👤 {st.session_state['user'].email}")
     st.write(f"📦 Plan: **{plan.capitalize()}**")
-
     _show_subscription_banner(sub, plan)
-
     st.divider()
-
     for key, label in PAGES.items():
         if st.button(label, use_container_width=True, type="primary" if key == current_page else "secondary"):
             set_page(key)
-
     st.divider()
     if st.button("Logout", use_container_width=True):
         logout()
