@@ -48,6 +48,8 @@ PAGES = {
 
 DEFAULT_PAGE = "konversi"
 
+print(sub)
+st.write(sub)
 
 def get_current_page() -> str:
     page = st.query_params.get("page", DEFAULT_PAGE)
